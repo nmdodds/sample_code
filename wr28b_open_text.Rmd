@@ -1,0 +1,586 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Load Libraries and Data
+
+```{r}
+library(tidyverse)
+library(naniar)
+library(quanteda)
+library(readxl)
+library(ggthemes)
+library(extrafont)
+windowsFonts(sans = "Franklin Gothic Book")
+loadfonts(device = "win")
+loadfonts(device = "postscript")
+
+setwd("X") 
+ncap <- read_csv(
+  file = "NCAPSurveySummary_SurveyResponsesDataset.csv", 
+  col_names = T, 
+  na = ""
+) %>% 
+  janitor::clean_names()
+
+```
+
+
+# Data Wrangling
+
+```{r}
+# Remove duplicates
+ncap <- ncap %>% 
+  distinct()
+# Pivot Wide
+ncap_wide <- ncap %>% 
+  select(-respondent_count) %>% 
+  pivot_wider(
+    names_from = question, values_from = response
+  ) %>% 
+  janitor::clean_names()
+# Remove NA's 
+ncap_wide <- ncap_wide %>% 
+  replace_with_na_all(condition = ~ .x %in% c("na", "NA", "N/A", "n/a", "Na", "N/a"))
+
+# Clean up Colnames (dirty)
+ncap_wide <- ncap_wide %>% 
+  rename_with(
+    ~ str_replace(.x, "(^[^_]*_[^_]*).*", "\\1"), 
+    .cols = 25:ncol(ncap_wide)
+  )
+# Index a back-up vector to return to if needed 
+back_up <- ncap_wide$wr28b_if
+```
+
+# Pre-Processing 
+## Create Some pre-processing functions
+
+### my_number_replacement
+
+This function replaces digits in a string with their corresponding text.
+It can be scaled out to include any range of numbers by adjusting the
+the two associated indices: `numbers_text` & `digits`. The current
+version captures the range of numbers 1:50.
+
+```{r}
+# Arguments 
+## string ~ the string to be transformed 
+## digits ~ the pattern of digits to be replaced
+## number_text ~ the vector of replacement number texts 
+### The final output will be the transformed string of text
+my_number_replacement <- function(string, digits, number_text){
+  reduce(
+    seq_along(digits), function(string, i){
+      str_replace_all(string, digits[i], number_text[i])
+    }, 
+    .init = string
+  )
+}
+## Create some Indices for functions 
+### Text for numbers
+numbers_text <- c(
+   "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+  "eighteen", "nineteen", "twenty", "twenty-one", "twenty-two", "twenty-three",
+  "twenty-four", "twenty-five", "twenty-six", "twenty-seven", "twenty-eight",
+  "twenty-nine", "thirty","thirty-one", "thirty-two", "thirty-three",
+  "thirty-four", "thirty-five", "thirty-six", "thirty-seven", "thirty-eight",
+  "thirty-nine", "forty", "forty-one", "forty-two", "forty-three", "forty-four",
+  "forty-five", "forty-six", "forty-seven", "forty-eight", "forty-nine", "fifty", 
+  "fifty-one", "fifty-two", "fifty-three", "fifty-four", "fifty-five", 
+  "fifty-six", "fifty-seven", "fifty-eight", "fifty-nine", "sixty"
+)
+### Digits up to 50 
+digits  <- paste0("\\b", 1:60, "\\b")
+```
+
+
+### my_ordinal_number_replacement
+The function will replace all of the instances of ordinal numbers with their 
+corresponding text (1st - first, 2nd - second, 3rd - third, etc.). Scaling this 
+function out to capture a larger range of ordinals can be done as well, however 
+please ensure you are checking to ensure the correct regex patterns are being 
+implemented. The associated indices are: `ordinal_digits` & `ordinal_text`. 
+
+```{r}
+# Arguments
+## string ~ the string to be transformed
+## ordinal_digits ~ vector of the pattern of ordinal digits to be replaced
+## ordinal_text ~ vector with the text of the replacement ordinal text
+### The final output will be the transformed string of text
+my_ordinal_number_replacement <- 
+  function(string, ordinal_digits, ordinal_text){
+  reduce(
+    seq_along(ordinal_digits), function(string, i){
+      str_replace_all(string, ordinal_digits[i], ordinal_text[i])
+    }, 
+    .init = string
+  )
+  }
+
+# Create some Indices for the function 
+## Ordinal text 
+ordinal_text <- c(
+  "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", 
+  "ninth", "tenth","eleventh", "twelfth", "thirteenth", "fourteenth",
+  "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth",
+  "twentieth",  "twenty-first", "twenty-second", "twenty-third",
+  "twenty-fourth", "twenty-fifth", "twenty-sixth", "twenty-seventh",
+  "twenty-eighth", "twenty-ninth", "thirtieth","thirty-first", "thirty-second", 
+  "thirty-third", "thirty-fourth", "thirty-fifth", "thirty-sixth",
+  "thirty-seventh", "thirty-eighth", "thirty-ninth", "fortieth"
+) 
+
+## Ordinal Digits
+ordinal_digits <- paste0(
+  "\\b", 
+  1:40, 
+  str_sub(
+    ordinal_text, 
+    start = nchar(ordinal_text) - 1, 
+    end = nchar(ordinal_text)
+  ), 
+  "\\b"
+)
+```
+
+
+### my_stop_word_removal
+This function will remove stopwords in a string. An index of stop words is 
+created and can be adjusted to include or remove as needed.
+```{r}
+# Create a vector of stop words that to remove from the text
+stop_words <- c("about", "above", "again", "against", "all", "am", "an", "and", 
+                "any", "are", "aren't", "as", "at", "be", "because", "been", 
+                "before", "being", "below", "between", "both", "but", "by", 
+                "can't", "cannot", "could", "couldn't", "did", "didn't", "do", 
+                "does", "doesn't", "doing", "don't", "down", "during", "each",
+                "few", "for", "from", "further", "had", "hadn't", "has",
+                "hasn't", "have", "haven't", "having", "he", "he'd", "he'll",
+                "he's", "her", "here", "here's", "hers", "herself", "him",
+                "himself", "his", "how", "how's", "i", "i'd", "i'll", "i'm",
+                "i've", "if", "in", "into", "is", "isn't", "it", "it's", "its",
+                "itself", "let's", "me", "more", "most", "mustn't", "my",
+                "myself", "nor", "of", "other", "ought", "our",
+                "ours", "ourselves", "out", "over", "own", "same", "shan't",
+                "she", "she'd", "she'll", "she's", "should", "shouldn't", "so",
+                "some", "such", "than", "that", "that's", "the", "their", 
+                "theirs", "them", "themselves", "then", "there", "there's", 
+                "these", "they", "they'd", "they'll", "they're", "they've", 
+                "this", "those", "through", "to", "too", "under", "until", 
+                "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're",
+                "we've", "were", "weren't", "what", "what's", "when", "when's",
+                "where", "where's", "which", "while", "who", "who's", "whom",
+                "why", "why's", "will", "with", "won't", "would", "wouldn't", 
+                "you", "you'd", "you'll", "you're", "you've", "your", "yours",
+                "yourself", "yourselves", "work", "worked")
+
+## Create Regex Pattern
+stop_words <- paste0("\\b", stop_words, "\\b")
+
+# Arguments 
+## string ~ the string to be transformed 
+## stop_words ~ a character vector of stop words to be removed from the string
+### the final output will be the transformed string
+my_remove_stopwords <- function(string, stop_words){
+  reduce(
+    seq_along(stop_words), function(string, i){
+      str_remove_all(string, stop_words[i])
+    }, 
+    .init = string
+  )
+}
+
+```
+
+## Run Pre-Processing Steps 
+```{r}
+# Distinct Responses
+ncap_wide %>% count(wr28b_if) 
+```
+
+```{r}
+ncap_wide$wr28b_if <- back_up
+```
+
+```{r}
+# Process Steps 
+ncap_wide <- ncap_wide %>% 
+  mutate(
+    # Type cast to lowercase
+    wr28b_if = tolower(wr28b_if), 
+    # Punctutions
+    ## Periods
+    wr28b_if = str_replace_all(wr28b_if, "\\.", " "),
+    ## Commas 
+    wr28b_if = str_replace_all(wr28b_if, "\\,", " "),
+    ## Apostrophes  
+    wr28b_if = str_replace_all(wr28b_if, "\\'", " "),
+    # Digits
+    ## Capture one half 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b1/2\\b", 
+      "one-half"
+    ),
+    ## Replace Ordinal Digits with number text first 
+    wr28b_if = my_ordinal_number_replacement(
+      wr28b_if,
+      ordinal_digits, 
+      ordinal_text
+    ),
+    ## Split digits from characters 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "(?<=\\D)(?=\\d)|(?<=\\d)(?=\\D)|(?<=\\d)(?=\\b)|(?<=\\b)(?=\\d)", 
+      " "
+    ),
+    ## Replace all digits with their number text 
+    wr28b_if = my_number_replacement(
+      wr28b_if, 
+      digits, 
+      numbers_text
+    ),
+    # Remove Stop Words 
+    #wr28b_if = my_remove_stopwords(
+     # wr28b_if, 
+      # stop_words
+    #),
+    # Standardize time periods 
+    ## Hours 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(hours|hr|hrs)\\b", 
+      "hour"
+    ),
+    ## Days
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(days)\\b", 
+      "day"
+    ),
+    ## Weeks 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(wk|wks|weeks|weekly)\\b", 
+      "week"
+    ),
+    ## Months
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(months|monthly)\\b", 
+      "month"
+    ),
+    # Remove double spaces
+    wr28b_if = str_replace_all(wr28b_if, "  ", " "), 
+    # Remove Text NA's
+    wr28b_if = case_when(
+      str_detect(wr28b_if, "\\b(n/|n/a|na|not applicable)\\b") ~ NA, 
+      str_detect(wr28b_if, "n/") ~ NA,
+      str_detect(wr28b_if, "non-applicable") ~ NA,
+      T ~ wr28b_if
+    ),
+    # Remove no or none text responses
+    wr28b_if = case_when(
+      str_detect(wr28b_if, "^\\b(no|none|nope)\\b") ~ NA, 
+      str_detect(wr28b_if, 
+                 "^\\b(not really|not sure|not regular|not that i am)\\b") ~ NA,
+      T ~ wr28b_if
+    ),
+    # Remove the word yes
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(yeah|yes|yea|ya)\\b", 
+      ""
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(yeah|yes|yea|ya|)\\b", 
+      ""
+    ),
+    # Remove Special Characters at the stary of a string
+     wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^[^A-Za-z0-9]+", 
+      ""
+    ),
+    # Day Ranges 
+    ## Monday - Friday 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(m-f|mon-fri|mon - fri|m - f)\\b", 
+      "monday through friday"
+    ),
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(m-f|mon-fri|mon - fri|m - f)\\b", 
+      "monday through friday"
+    ),
+    ## Monday - Saturday 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(m-s|mon-sat|mon - sat|m - s)\\b", 
+      "monday through saturday"
+    ),
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(m-s|mon-sat|mon - sat|m - s)\\b", 
+      "monday through saturday"
+    ),
+    # Days of the week
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(mon|m)\\b", 
+      "monday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(tues|t)\\b", 
+      "tuesday"
+    ), 
+        wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(wed|w)\\b", 
+      "wednesday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(thurs|th)\\b", 
+      "thursday"
+    ),
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(fri|f)\\b", 
+      "friday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(sat|s)\\b", 
+      "saturday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\b(sun|s)\\b", 
+      "sunday"
+    ), 
+     wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(mon|m)\\b", 
+      "monday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(tues|t)\\b", 
+      "tuesday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(wed|w)\\b", 
+      "wednesday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(thurs|th)\\b", 
+      "thursday"
+    ),
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(fri|f)\\b", 
+      "friday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(sat|s)\\b", 
+      "saturday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "^\\b(sun|s)\\b", 
+      "sunday"
+    ),
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\bweekdays\\b", 
+      "weekday"
+    ), 
+    wr28b_if = str_replace_all(
+      wr28b_if, 
+      "\\bweekends\\b", 
+      "weekend"
+    ),
+    # Remove those with only digits in them 
+    wr28b_if = case_when(
+      !is.na(as.numeric(wr28b_if)) ~ "", 
+      T ~ wr28b_if
+    ),
+    wr28b_if = str_trim(wr28b_if, side = "both"),
+    wr28b_if = str_replace_all(wr28b_if, "\\s{2,}", " "), 
+    wr28b_if = str_replace_all(wr28b_if, " ", "_"), 
+    wr28b_if = str_replace_all(wr28b_if, "__", "_")
+  )
+
+
+```
+
+
+## WR28B
+
+```{r}
+# Import Coded Responses to Match to Main DF 
+wr28b <- bind_rows(
+  read_xlsx("wr28b_if_open_text_brian.xlsx"), 
+  read_xlsx("wr28b_if_open_text_dodds.xlsx")
+)
+```
+
+```{r}
+# Recode
+wr28b <- wr28b %>% 
+  mutate(
+    rest_cycle_pattern = case_when(
+      rest_cycle_pattern == 1 ~ "5 days on; 2 days off", 
+      rest_cycle_pattern == 2 ~ "6 days on; 1 day off",
+      rest_cycle_pattern == 3 ~ "14 days on; 1 day off", 
+      rest_cycle_pattern == 4 ~ "Longer than 30 days with no days off", 
+      rest_cycle_pattern == 5 ~ "Rest schedule established after three or more weeks", 
+      rest_cycle_pattern == 6 ~ "Two or more cycles in same deployment",
+      rest_cycle_pattern == 7 ~ "Other",
+      T ~ NA
+    ), 
+    wr28b_if = str_replace_all(wr28b_if, "\\s{2,}", " "),
+    wr28b_if = str_replace_all(wr28b_if, " ", "_"),
+    wr28b_if = str_replace_all(wr28b_if, "__", "_"), 
+    wr28b_if = str_trim(wr28b_if, "both")
+  )
+# Bring back to main DF
+ncap_wide <- left_join(ncap_wide, wr28b %>% select(wr28b_if, rest_cycle_pattern), by = "wr28b_if")
+```
+
+# Create and export Data Viz for Slide Deck
+# Lollipop
+```{r}
+ncap_wide %>% 
+ count(rest_cycle_pattern) %>% 
+  filter(!is.na(rest_cycle_pattern)) %>% 
+    mutate(rest_cycle_pattern = case_when(
+    rest_cycle_pattern == "Longer than 30 days with no days off" ~ 
+      "30+ days with no day off", 
+    rest_cycle_pattern == "Rest schedule established after three or more weeks" ~ 
+      "Cycle established after 2+ weeks", 
+    rest_cycle_pattern == "Two or more cycles in same deployment" ~
+      "2+ cycles in same deployment", 
+    T ~ rest_cycle_pattern
+  )) %>% 
+  ggplot(aes(x = fct_reorder(rest_cycle_pattern, n), y = n)) +
+  geom_segment(
+    aes(x = rest_cycle_pattern, xend = rest_cycle_pattern, y = 0, yend = n), 
+    color = "#7aa5c1", linewidth = 1
+  ) + 
+  geom_point(color = "#005288", size = 10.5) + 
+    geom_text(
+      aes(label = n), size = 3, color = "#fcfdfd"
+    ) + 
+    xlab("") +
+    ylab("") +
+    ggtitle(label = "Rest Cycle Patterns Counts", subtitle = "WR28b")+ 
+    coord_flip() +  
+    theme(
+    legend.position = "none",
+    legend.title = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y = element_text(size = 11, color = "black"),
+    axis.ticks.x =  element_blank(), 
+    axis.text.x = element_blank(),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.background = element_blank(),
+    # panel.grid = element_blank(),
+    panel.background = element_blank(),
+    axis.line.y =  element_line(colour = "black", linewidth = 1.5)
+  ) 
+ggsave("rest_day_lollipop.png")
+```
+# Barchart
+```{r}
+ncap_wide %>%
+  count(rest_cycle_pattern) %>%
+  filter(!is.na(rest_cycle_pattern)) %>%
+  mutate(
+    rest_cycle_pattern = case_when(
+      rest_cycle_pattern == "Longer than 30 days with no days off" ~
+        "30+ days with no day off",
+      rest_cycle_pattern == "Rest schedule established after three or more weeks" ~
+        "Cycle established after 2+ weeks",
+      rest_cycle_pattern == "Two or more cycles in same deployment" ~
+        "2+ cycles in same deployment",
+      T ~ rest_cycle_pattern
+    )
+  ) %>%
+  ggplot(aes(x = fct_reorder(rest_cycle_pattern, n), y = n)) +
+  geom_bar(stat = "identity", fill = "#005288") +
+  geom_text(aes(label = n), size = 4, color = "black", hjust = -.1, face = "bold") +
+  xlab("") +
+  ylab("") +
+  ggtitle(label = "Rest Cycle Patterns Counts", subtitle = "WR28b") +
+  ylim(c(0, 1800)) + 
+  coord_flip() +
+  theme(
+    legend.position = "none",
+    legend.title = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y = element_text(size = 11, color = "black"),
+    axis.ticks.x =  element_blank(), 
+    axis.text.x = element_blank(),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.background = element_blank(),
+    # panel.grid = element_blank(),
+    panel.background = element_blank(),
+    axis.line.y =  element_line(colour = "black", linewidth = 1.5)
+  )
+ggsave("rest_day_bar.png")
+```
+
+### Crosstab by Employeee Type
+```{r}
+ncap_wide %>%
+  count(rest_cycle_pattern, dts_employee_type) %>%
+  filter(!is.na(rest_cycle_pattern) & !is.na(dts_employee_type)) %>%
+  mutate(
+    rest_cycle_pattern = case_when(
+      rest_cycle_pattern == "Longer than 30 days with no days off" ~
+        "30+ days with no day off",
+      rest_cycle_pattern == "Rest schedule established after three or more weeks" ~
+        "Cycle established after 2+ weeks",
+      rest_cycle_pattern == "Two or more cycles in same deployment" ~
+        "2+ cycles in same deployment",
+      T ~ rest_cycle_pattern
+    )
+  ) %>%
+  ggplot(aes(x = fct_reorder(rest_cycle_pattern, n), y = n)) +
+  geom_bar(stat = "identity", fill = "#005288") +
+  geom_text(aes(label = n), size = 4, color = "black", hjust = -.1, face = "bold") +
+  xlab("") +
+  ylab("") +
+  ggtitle(label = "Rest Cycle Patterns Counts", subtitle = "WR28b") +
+  ylim(c(0, 1800)) + 
+  coord_flip() +
+  theme(
+    legend.position = "none",
+    legend.title = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y = element_text(size = 11, color = "black"),
+    axis.ticks.x =  element_blank(), 
+    axis.text.x = element_blank(),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.background = element_blank(),
+    # panel.grid = element_blank(),
+    panel.background = element_blank(),
+    axis.line.y =  element_line(colour = "black", linewidth = 1.5)
+  ) + 
+  facet_wrap(~dts_employee_type)
+```
+
