@@ -1,0 +1,384 @@
+---
+title: "Comparative and EDA Analysis on High Dimensional Survey Data"
+author: "N. Dodds"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+In order to better familiarize myself with the NCAP survey data, I
+wanted to compare all of the questions in our survey data, between each
+survey and they population of surveys. The number of respondents (about
+7000) and the large number of survey questions (close to 175) created a
+barrier for a quick analysis. Therefore, I applied Fisher's Exact Test
+to every question across every disaster survey and the population of
+surveys. I was able to complete this through the following code which
+showcases how I iterate through every question and every survey,
+applying the test throughout the process. Finally, I am able to flag
+which questions had a larger proportion of statistically significant
+P-Values and create data visuals for each one. This was the first step
+in a longer and ongoing analysis.
+
+```{r include=FALSE}
+options(scipen = 99999)
+library(tidyverse)
+library(readxl)
+library(naniar)
+library(ggthemes)
+library(grid)
+library(gridExtra)
+library(cowplot)
+library(ggpubr)
+setwd("R:\\CIP_NCAP\\SurveyData\\Processed_MasterSurveyData") 
+ncap <- read_csv(
+  file = "NCAPSurveySummary_SurveyResponsesDataset.csv", 
+  col_names = T, 
+  na = ""
+)
+```
+
+# Data Wrangling
+
+```{r echo = TRUE}
+
+# Remove duplicates
+ncap <- ncap %>%
+  distinct()
+# Pivot Wide
+ncap_wide <- ncap %>%
+  select(-Respondent_Count) %>%
+  pivot_wider(
+    names_from = Question, values_from = Response
+  ) %>%
+  janitor::clean_names()
+
+# Remove NA's
+ncap_wide <- ncap_wide %>%
+  replace_with_na_all(condition =  ~ .x %in% c("na", "NA", "N/A", "n/a", "Na", "N/a"))
+
+# Standardize Response
+ncap_wide <- ncap_wide %>%
+  mutate(
+    # WR1
+    wr1_how_well_was_the_overall_staffing_level_matched_to_the_needs_of_this_incident =
+      case_when(
+        str_detect(
+          wr1_how_well_was_the_overall_staffing_level_matched_to_the_needs_of_this_incident,
+          "4"
+        ) ~ "[4] Just Right",
+        T ~ wr1_how_well_was_the_overall_staffing_level_matched_to_the_needs_of_this_incident
+      ),
+    # WR23A
+    wr23a_they_were_clear_and_easy_to_understand = case_when(
+      str_detect(wr23a_they_were_clear_and_easy_to_understand,
+                 "(1|2)") ~ "No",
+      str_detect(wr23a_they_were_clear_and_easy_to_understand,
+                 "3") ~ "Does Not Apply",
+      str_detect(wr23a_they_were_clear_and_easy_to_understand,
+                 "(4|5)") ~ "Yes",
+      T ~ wr23a_they_were_clear_and_easy_to_understand
+    ),
+    # WR23B
+    wr23b_i_knew_what_to_expect_from_this_deployment = case_when(
+      str_detect(wr23b_i_knew_what_to_expect_from_this_deployment,
+                 "(1|2)") ~ "No",
+      str_detect(wr23b_i_knew_what_to_expect_from_this_deployment,
+                 "3") ~ "Does Not Apply",
+      str_detect(wr23b_i_knew_what_to_expect_from_this_deployment,
+                 "(4|5)") ~ "Yes",
+      T ~ wr23b_i_knew_what_to_expect_from_this_deployment
+    ),
+    # WR23C
+    wr23c_i_understood_why_i_was_deployed = case_when(
+      str_detect(wr23c_i_understood_why_i_was_deployed,
+                 "(1|2)") ~ "No",
+      str_detect(wr23c_i_understood_why_i_was_deployed,
+                 "3") ~ "Does Not Apply",
+      str_detect(wr23c_i_understood_why_i_was_deployed,
+                 "(4|5)") ~ "Yes",
+      T ~ wr23c_i_understood_why_i_was_deployed
+    ),
+    # WR26A
+    wr26a_i_understood_how_to_make_progress_in_my_ptb = case_when(
+      str_detect(wr26a_i_understood_how_to_make_progress_in_my_ptb,
+                 "(1|2)") ~ "No",
+      str_detect(wr26a_i_understood_how_to_make_progress_in_my_ptb,
+                 "3") ~ "Does Not Apply",
+      str_detect(wr26a_i_understood_how_to_make_progress_in_my_ptb,
+                 "(4|5)") ~ "Yes",
+      T ~ wr26a_i_understood_how_to_make_progress_in_my_ptb
+    ),
+    # WR26B
+    wr26b_i_was_able_to_receive_endorsements_in_my_ptb = case_when(
+      str_detect(wr26b_i_was_able_to_receive_endorsements_in_my_ptb,
+                 "(1|2)") ~ "No",
+      str_detect(wr26b_i_was_able_to_receive_endorsements_in_my_ptb,
+                 "3") ~ "Does Not Apply",
+      str_detect(wr26b_i_was_able_to_receive_endorsements_in_my_ptb,
+                 "(4|5)") ~ "Yes",
+      T ~ wr26b_i_was_able_to_receive_endorsements_in_my_ptb
+    ),
+    # WR26C
+    wr26c_the_ptb_endorsements_i_received_reflected_all_the_work_i_did_while_deployed = case_when(
+      str_detect(
+        wr26c_the_ptb_endorsements_i_received_reflected_all_the_work_i_did_while_deployed,
+        "(1|2)"
+      ) ~ "No",
+      str_detect(
+        wr26c_the_ptb_endorsements_i_received_reflected_all_the_work_i_did_while_deployed,
+        "3"
+      ) ~ "Does Not Apply",
+      str_detect(
+        wr26c_the_ptb_endorsements_i_received_reflected_all_the_work_i_did_while_deployed,
+        "(4|5)"
+      ) ~ "Yes",
+      T ~ wr26c_the_ptb_endorsements_i_received_reflected_all_the_work_i_did_while_deployed
+    )
+  )
+```
+
+```{r}
+dim(ncap_wide)
+```
+
+For reference, this data has 6765 Rows and 188 columns.
+
+```{r}
+# Index the question names 
+questions <- colnames(ncap_wide[5:ncol(ncap_wide)])
+## Set Names 
+questions <- set_names(questions, questions)
+## Index Questions we want to exclude 
+index <- c(
+  "wr6_beyond_the_resources_above_what_else_made_you_more_ready_for_this_deployment", 
+  "wr28_how_many_rest_days_did_you_take_during_your_deployment_if_any",
+  "wr28b_if_there_was_a_regular_rest_schedule_or_cycle_for_example_6_days_on_1_day_off_what_was_the_schedule", 
+  "dts_on_site_date", 
+  "dts_release_date", 
+  "wr1a_in_which_program_areas_or_positions_did_you_notice_overstaffing", 
+  "wr1b_in_which_program_areas_or_positions_did_you_notice_understaffing", 
+  "wr2a_what_positions_were_missing_or_understaffed_in_your_cadre_or_section", 
+  "wr3a_what_skills_were_missing_in_your_cadre_or_section", 
+  "wr30b_how_many_hours_did_you_stay_in_deployed_status_the_last_time_you_used_this_process",
+  "e2i_other_please_specify", 
+  "rm5i_other_please_specify", 
+  "rm6h_other_please_specify", 
+  "rm7i_other_please_specify", 
+  "cq1_if_you_supported_other_disaster_s_at_the_same_time_as_this_one_please_list_them_in_the_box_below"
+)
+
+# Create Table
+fishers_data <- ncap_wide %>% 
+  mutate(
+    disaster_id = case_when(
+      disaster_id != "DR-4757" ~ "All Surveys", 
+      T ~ disaster_id
+    )
+  ) 
+
+
+# Create Contingency Tables 
+cross_tabs <- map(questions[-which(questions %in% index)], ~{
+  table(
+    fishers_data %>% 
+      pull(disaster_id), 
+    fishers_data %>% 
+      pull(.x)
+  )
+})
+```
+
+```{r}
+# Create named index vector of unique disaster ID's 
+dr_ids <- ncap_wide %>% 
+  distinct(disaster_id) %>% 
+  pull(disaster_id)
+
+dr_ids <- set_names(dr_ids, dr_ids)
+
+# Create a list of df's that splits each unique disaster ID away from the 
+# the population of surveys. 
+fisher_dfs <- map(dr_ids, ~ {
+  ncap_wide %>% 
+    mutate(
+      disaster_id = case_when(
+        disaster_id != .x ~ "All Surveys", 
+        T ~ disaster_id
+      )
+    )
+})
+```
+
+# Run Fisher's Exact Test
+
+## Create Contingency Tables
+
+Having created the subsetted tables, I need to iterate through each of
+these data frames, split the questions into their own lists, and then
+create the contingency tables. I use two nested map functions: the first
+will iterate through the dataframes, the second will iterate through
+those questions in the dataframes. This will output a nested list, where
+the first index is the associated DR number and the second index a
+contingency table for any given question.
+
+```{r}
+contingency_tables <- map(dr_ids, ~{
+  # Subset each dataframe in the fishers_df list
+  df <- fisher_dfs[[.x]]
+  # Iterate through each question within that subset and create tables
+  map(questions[-which(questions %in% index)], ~{
+    table(
+      df %>% 
+        pull(disaster_id), 
+      df %>% 
+        pull(.x)
+    )
+  })
+})
+```
+
+## Run Fisher's Exact Tests
+
+I'll need to iterate through every nested table in the list, apply the
+Fisher Test to each one, pull the associated P-Values for each question,
+and then add a flag to note significance. Fisher's Exact test is already
+computationally heavy, therefore 100,000 random replicates of Monte
+Carlo simulations will be ran to to provide a robust estimate of the
+true P-Value. However, a problem arises in that Fisher's Exact Test
+requires that there are at least two non-zero row marginals. Some of
+these questions are new, and therefor not present for every Disaster ID.
+These need to be skipped.
+
+```{r}
+fishers_tests <- map(dr_ids, ~{
+  # Subset each parent list in the contingency_tables list 
+  parent_dr_number <- contingency_tables[[.x]]
+  # Iterate through each question in the subset and run Fisher's Exact Test 
+  map_dfr(questions[-which(questions %in% index)], ~{
+    # Run Fishers Test and extract the P-Value
+    ## First create a logical statement to skip instances where there are not 
+    ## at least two row marginals (i.e. non responses).
+    if(sum(
+      rowSums(parent_dr_number[[.x]]) > 0
+    ) >= 2){
+      # Extract P value 
+      p_value <- fisher.test(
+        parent_dr_number[[.x]], 
+        # Estimate true P-Value through Monte Carlo Simulations
+        simulate.p.value = T, 
+        # 100000 Random Replicates 
+        B = 100000
+      )$p.value
+      # Create new DF
+      tibble(
+        question = .x, 
+        p_value = p_value
+      ) %>% 
+        # Add Significance Flag (.05 alpha)
+        mutate(
+          significant = case_when(
+            p_value < .05 ~ "yes", 
+            T ~ "no"
+          )
+        )
+    } else{
+      NULL
+    }
+  })
+})
+
+# Combine the outputs into a single dataframe and create a frequency table
+pvalue_df <- fishers_tests %>% 
+  data.table::rbindlist(use.names = T) %>% 
+  count(question, significant) %>% 
+  group_by(question) %>% 
+  mutate(
+    percent = n / sum(n)
+  )
+```
+
+# Questions of Interest
+
+```{r}
+pvalue_df %>% 
+  filter(percent > .5 & significant == "yes") %>% 
+  select(question)
+
+```
+
+There are 10 questions where the majority of the survey for each
+disaster ID had a p value that was significant at the .05 alpha level.
+In other words: these questions are those where there were a majority of
+instances where the distribution of answers from the respondents did not
+match the expected distributions of the population of surveys (by
+disaster ID). This suggests that these questions might be ones where the
+context of the disaster have more of an impact on the answers given by
+respondents. However, a few of these, specifically the DTS questions,
+are expected to be significant.. These variables are often specific to
+each disaster and region, so their observed distributions would more
+than likely be different from their expected distributions.
+
+## Stacked Percent Barcharts
+
+I will now create stacked percent barcharts for every question in the
+survey that a Fisher's Exact test was ran on. These will be supplemental
+visuals to show the proportion of surveys which noted a significant
+p-value for every question. We create these individually, though
+iteration, and will index those which had larger proportion of
+significant p-values
+
+```{r}
+stacked_barcharts <- map(questions[-which(questions %in% index)], ~ {
+  pvalue_df %>%
+    filter(question == .x) %>%
+    ggplot(aes(x = question, y = n, fill = significant)) +
+    geom_bar(stat = "identity", position = "fill") +
+    geom_text(aes(
+      x = question,
+      y = percent,
+      label = scales::percent(percent)
+    ),
+    position = position_fill(vjust = .5)) +
+    xlab("") +
+    ylab("Percent Statistically Significant") +
+    labs(title = str_replace(.x, "(^[^_]*_[^_]*).*", "\\1")) +
+    scale_y_continuous(labels = scales::percent_format()) +
+    coord_flip() +
+    scale_fill_manual(values = c("yes" = "#005288", "no" = "#e08493")) +
+    geom_hline(yintercept = .5,
+               linetype = "dashed",
+               color = "black") +
+    theme(
+    legend.position = "none",
+    legend.title = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.x =  element_blank(), 
+    axis.text.x = element_blank(),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.background = element_blank(),
+    # panel.grid = element_blank(),
+    panel.background = element_blank(),
+    axis.line.x =  element_line(colour = "black", linewidth = 1.5)
+  )
+})
+```
+
+```{r}
+# Index Surveys which had larger proportion of significant P-values 
+sig_index <-  pvalue_df %>%
+  filter(percent > .5 & significant == "yes") %>% 
+  pull(question)
+```
+
+```{r}
+# Index Surveys which had larger proportion of significant P-values 
+sig_index <-  pvalue_df %>%
+  filter(percent > .5 & significant == "yes") %>% 
+  pull(question)
+stacked_barcharts[[sig_index]]
+```
