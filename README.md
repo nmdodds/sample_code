@@ -1,1 +1,1 @@
-
+I've also included an uploaded an updated version of the ETL script (Batch_ETL_Script.R). This one combines the three "pipeline" files into a single script, now able to batch process surveys of all types in a single run. 
